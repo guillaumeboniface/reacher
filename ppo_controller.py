@@ -20,6 +20,7 @@ class PPOController:
         self.brain_name = brain_name
         self.__dict__.update(config.as_dict())
         self.policy = Policy(config, 33, 4) if policy is None else policy
+        self.critic = Critic(config, 33)
         self.epsilon = config.epsilon_start
         self.beta = config.beta_start
         self.scores = []
@@ -111,19 +112,14 @@ class PPOController:
         new_log_probabilities, entropy = self.policy.get_log_probabilities_and_entropy(states, actions)
         
         ratio = torch.exp(new_log_probabilities - old_log_probabilities)
+        
+        states_values = self.critic(states)
+        advantages = rewards - states_values
 
         clip = torch.clamp(ratio, 1 - self.epsilon, 1 + self.epsilon)
-        clipped_surrogate = torch.min(ratio * rewards, clip * rewards)
+        clipped_surrogate = torch.min(ratio * advantages, clip * advantages)
 
-        # include a regularization term to promote a step wise evolution of the policy
-        # divergence = F.kl_div(new_probabilities, old_probabilities, reduction='batchmean')
-
-        # this returns an average of all the entries of the tensor
-        # effective computing L_sur^clip / T
-        # averaged over time-step and number of trajectories
-        # this is desirable because we have normalized our rewards
-        # return torch.mean(clipped_surrogate + self.beta * divergence), divergence
-        return -1 * torch.mean(clipped_surrogate) - 0.01 * entropy.mean(), 0
+        return -1 * torch.mean(clipped_surrogate) + 0.1 * self.critic.mse(states_values, rewards) - 0.01 * entropy.mean(), 0
             
     def compute_discounted_future_rewards(self, rewards):
         discounts = np.array([self.gamma ** i for i in range(len(rewards))])[:, np.newaxis]
@@ -181,6 +177,28 @@ class Policy(nn.Module):
         normal = torch.distributions.multivariate_normal.MultivariateNormal(normal_mean, cov_mat)
         log_probabilities = normal.log_prob(actions)
         return log_probabilities, normal.entropy()
+    
+class Critic(nn.Module):
+    
+    def __init__(self, config, state_size):
+        super(Critic, self).__init__()
+        self.__dict__.update(config.as_dict())
+        self.mse = torch.nn.MSELoss()
+        self.fc = []
+        in_node = state_size
+        for spec in self.mlp_specs:
+            self.fc.append(nn.Linear(in_node, spec))
+            in_node = spec
+        # the layers need to be properties of the class instance for the train operation to work
+        for i, fc in enumerate(self.fc):
+            setattr(self, 'fc_' + str(i), fc)
+        self.final_layer = nn.Linear(self.mlp_specs[-1], 1)
+        
+    def forward(self, states):
+        x = states
+        for fc in self.fc:
+            x = F.relu(fc(x))
+        return self.final_layer(x).squeeze()
         
         
         
