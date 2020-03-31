@@ -49,6 +49,11 @@ class MockContinuousPolicy:
     
     def eval(self):
         return
+    
+class MockCritic:
+        
+    def __call__(self, states):
+        return torch.arange(np.prod(states.shape)).view(states.shape)
 
 class Config:
     def __init__(self):
@@ -60,6 +65,7 @@ class Config:
         self.train_iterations = 4
         self.gamma = 0.5
         self.mlp_specs = (200, 150)
+        self.gae_lambda = 0.5
         
     def as_dict(self):
         return self.__dict__
@@ -69,7 +75,8 @@ class TestCollectTrajectories(unittest.TestCase):
     def setUp(self):
         self.env = MockEnvironment((33,), [[-1, 1] for i in range(4)], 20)
         self.policy = MockContinuousPolicy((4,))
-        self.controller = PPOController(self.env, 'bla', Config(), policy=self.policy)
+        self.critic = MockCritic()
+        self.controller = PPOController(self.env, 'bla', Config(), policy=self.policy, critic=self.critic)
 
     def test_shape(self):
         probabilities, states, actions, rewards = self.controller.collect_trajectories(self.env, 'bla', self.policy)
@@ -81,8 +88,21 @@ class TestCollectTrajectories(unittest.TestCase):
     def test_compute_discounted_future_rewards(self):
         rewards = np.array([[1, 0], [1, 1]])
         rewards = self.controller.compute_discounted_future_rewards(rewards)
-        print(rewards)
         self.assertTrue(np.all(rewards == np.array([[1.5, 0.5], [1, 1]])))
+        
+    def test_compute_gae_matrix(self):
+        rewards = np.array([[1, 0], [1, 1]])
+        matrix = self.controller.compute_gae_matrix(rewards)
+        self.assertTrue(np.all(matrix == np.array([[[1, 0], [1, 1]], [[1.5, 0.5], [1, 1]]])))
+        
+    def test_compute_gae(self):
+        rewards = np.array([[1, 0], [1, 1]])
+        matrix = self.controller.compute_gae_matrix(rewards)
+        print(matrix)
+        states = torch.ones((2, 2))
+        gae = self.controller.compute_gae(states, torch.from_numpy(matrix))
+        print(gae)
+        self.assertTrue(torch.all(gae == torch.Tensor([[1.875, 0.875], [-0.75, -1.5]])))
         
         
 

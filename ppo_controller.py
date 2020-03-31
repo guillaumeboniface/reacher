@@ -15,12 +15,12 @@ def rolling_avg_scores(scores, window):
 
 class PPOController:
     
-    def __init__(self, env, brain_name, config, policy=None):
+    def __init__(self, env, brain_name, config, policy=None, critic=None):
         self.env = env
         self.brain_name = brain_name
         self.__dict__.update(config.as_dict())
         self.policy = Policy(config, 33, 4) if policy is None else policy
-        self.critic = Critic(config, 33)
+        self.critic = Critic(config, 33) if critic is None else critic
         self.epsilon = config.epsilon_start
         self.beta = config.beta_start
         self.scores = []
@@ -32,7 +32,7 @@ class PPOController:
     def solve(self):
         for i_episode in range(1, self.num_episodes + 1):    
 
-            old_log_probabilities, states, actions, rewards = self.collect_trajectories(self.env, self.brain_name, self.policy)
+            old_log_probabilities, states, actions, rewards = self.collect_trajectories(self.env, self.brain_name, self.policy, max_t=self.max_t)
             
             self.scores.append(np.mean(np.sum(rewards, axis=0)))
             
@@ -52,14 +52,14 @@ class PPOController:
         actions, log_probabilities = self.policy.next_actions(states)
         return actions.cpu().data.numpy(), log_probabilities.cpu().data.numpy()
             
-    def collect_trajectories(self, env, brain_name, policy):
+    def collect_trajectories(self, env, brain_name, policy, max_t=128):
         env_info = self.env.reset(train_mode=True)[self.brain_name]
         state = env_info.vector_observations
         states = []
         actions = []
         log_probabilities = []
         rewards = []
-        while True:
+        while max_t:
             states.append(state)
             action, log_probability = self.act(state)
             actions.append(action)
@@ -72,33 +72,26 @@ class PPOController:
             state = next_state
             if np.any(done):
                 break
+            max_t -= 1
         return np.array(log_probabilities), np.array(states), np.array(actions), np.array(rewards)
     
     def train_loop(self, old_log_probabilities, states, actions, rewards):
         surrogate_buffer = []
         
-        rewards_future = self.compute_discounted_future_rewards(rewards)
-        
-        mean = np.mean(rewards_future, axis=1)
-        std = np.std(rewards_future, axis=1)
-        
-        normalized_rewards = rewards_future
-        mask = std != 0
-        normalized_rewards[mask] = (rewards_future[mask] - mean[mask][:,np.newaxis]) / std[mask][:,np.newaxis]
-        # if the deviation is null set the normalized reward to 0
-        mask = std == 0
-        normalized_rewards[mask] = 0
+        future_rewards = self.compute_discounted_future_rewards(rewards)
         
         old_log_probabilities = torch.from_numpy(old_log_probabilities).float().to(device)
         states = torch.from_numpy(states).float().to(device)
         actions = torch.from_numpy(actions).float().to(device)
-        normalized_rewards = torch.from_numpy(normalized_rewards).float().to(device)
+        future_rewards = torch.from_numpy(future_rewards).float().to(device)
         self.policy.train()
         for _ in range(self.train_iterations):
-            surrogate, divergence = self.compute_surrogate(old_log_probabilities, states, actions, normalized_rewards)
+            surrogate, divergence = self.compute_surrogate(old_log_probabilities, states, actions, future_rewards)
             surrogate_buffer.append(surrogate.cpu().data.numpy())
             self.optimizer.zero_grad()
             surrogate.backward()
+            torch.nn.utils.clip_grad_norm_(self.policy.parameters(), 1)
+            torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 1)
             self.optimizer.step()
             if divergence > self.divergence_target * 1.5:
                 self.beta *= 2
@@ -107,20 +100,61 @@ class PPOController:
         self.last_divergence = 0
         return surrogate_buffer
     
-    def compute_surrogate(self, old_log_probabilities, states, actions, rewards):
+    def compute_surrogate(self, old_log_probabilities, states, actions, future_rewards):
         
         new_log_probabilities, entropy = self.policy.get_log_probabilities_and_entropy(states, actions)
-        
         ratio = torch.exp(new_log_probabilities - old_log_probabilities)
         
         states_values = self.critic(states)
-        advantages = rewards - states_values
+        final_states_values = states_values[-1]
+        #discounts = self.gamma ** torch.arange(len(states), dtype=torch.float).view(-1, 1)
+        #advantages = future_rewards - states_values + discounts * final_states_values.expand(states_values.shape)
+        advantages = future_rewards - states_values
+        
+        future_rewards = F.normalize(future_rewards, p=1, dim=-1)
+        advantages = F.normalize(advantages, p=1, dim=-1)
 
         clip = torch.clamp(ratio, 1 - self.epsilon, 1 + self.epsilon)
         clipped_surrogate = torch.min(ratio * advantages, clip * advantages)
 
-        return -1 * torch.mean(clipped_surrogate) + 0.1 * self.critic.mse(states_values, rewards) - 0.01 * entropy.mean(), 0
+        return -1 * torch.mean(clipped_surrogate) + 0.1 * self.critic.mse(states_values, future_rewards) - 0.01 * entropy.mean(), 0
             
+    def compute_gae(self, states, gae_matrix):
+        # This is complex so giving an example with
+        # gae_lambda = 0.5 and gamma = 0.5
+        # gae_matrix = [[[1, 0],
+        #               [1, 1]],
+        #
+        #               [[1.5, 0.5],
+        #               [1, 1]]]
+        main_dim = len(states)
+        # states_values = [[0, 1],
+        #                  [2, 3]]
+        states_values = self.critic(states)
+        # shifted_states_values = [[0, 1]
+        #                          [2, 3]]
+        shifted_states_values = states_values.repeat(main_dim, 1, 1)
+        # shifted_states_values = [[[2, 3],
+        #                           [0, 0]],
+        #
+        #                         [[0, 0],
+        #                          [0, 0]]]
+        for i in range(main_dim):
+            shifted_states_values[i] = states_values.roll(-i - 1, 0)
+            shifted_states_values[i,-i - 1:] = 0
+        # advantages = [[[3, 2],
+        #                [-1, -2]],
+        #
+        #               [[1.5, -0.5],
+        #                [-1, -2]]]
+        gamma_discount = self.gamma ** torch.arange(main_dim, dtype=torch.float).view(-1, 1, 1)
+        advantages = gae_matrix - states_values.unsqueeze(0) + gamma_discount * shifted_states_values
+        lambda_discount = self.gae_lambda ** torch.arange(main_dim, dtype=torch.float).view(-1, 1, 1)
+        advantages *= lambda_discount
+        # return = [[1.875, 0.875],
+        #           [-0.75, -1.5]]
+        return (1 - self.gae_lambda) * torch.sum(advantages, 0), states_values
+    
     def compute_discounted_future_rewards(self, rewards):
         # This is complex so giving an example with gamma = 0.5 and
         # rewards = [[1, 0], [1, 1]]
@@ -139,9 +173,32 @@ class PPOController:
         # discounts = [[1, 0.5],
         #              [0, 1]]
         discounts = np.triu(discounts[range(main_dim), indexes])
-        # discounts = [[1.5, 0.5],
+        # rewards = [[1.5, 0.5],
         #              [1, 1]]
-        return np.dot(rewards.T, discounts.T).T
+        return np.dot(discounts, rewards)
+    
+    def compute_gae_matrix(self, rewards):
+        # This is complex so giving an example with gamma = 0.5 and
+        # rewards = [[1, 0], [1, 1]]
+        main_dim = len(rewards)
+        # discounts = [1, 0.5]
+        discounts = (self.gamma ** np.arange(main_dim))
+        # discounts = [[1, 0.5],
+        #              [1, 0.5]]
+        discounts = np.tile(discounts, main_dim).reshape(main_dim, main_dim)
+        # indexes = [[0, 1],
+        #            [1, 2]]
+        indexes = np.tile(np.arange(main_dim), main_dim).reshape(main_dim, main_dim) + np.arange(main_dim)[:,np.newaxis]
+        # indexes = [[0, 1],
+        #            [1, 0]]
+        indexes = np.mod(indexes, main_dim)
+        # mc_discount_matrix = [[1, 0.5],
+        #                       [0, 1]]
+        mc_discount_matrix = np.triu(discounts[range(main_dim), indexes])
+        gae_discount_matrix = np.tile(mc_discount_matrix, len(rewards)).reshape((len(rewards),) + mc_discount_matrix.shape).swapaxes(0, 1)
+        for i in range(len(rewards) - 1):
+            gae_discount_matrix[i] = np.tril(gae_discount_matrix[i], i)
+        return np.dot(gae_discount_matrix, rewards)
     
     def print_status(self, i_episode):
         print("\rEpisode %d/%d | Average Score: %.2f | Model surrogate: %.5f | Divergence: %.2f   " % (
