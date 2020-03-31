@@ -40,12 +40,15 @@ class MockContinuousPolicy:
     def __init__(self, action_shape):
         self.action_shape = action_shape
     
-    def act(self, state):
+    def next_actions(self, state):
         # return actions and probabilities
-        return np.ones((state.shape[0],) + self.action_shape), np.ones((state.shape[0],) + self.action_shape)
+        return torch.ones((state.shape[0],) + self.action_shape), torch.ones((state.shape[0],) + self.action_shape)
     
     def parameters(self):
         return torch.nn.Linear(5, 5).parameters()
+    
+    def eval(self):
+        return
 
 class Config:
     def __init__(self):

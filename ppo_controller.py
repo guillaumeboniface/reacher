@@ -126,11 +126,26 @@ class PPOController:
         return -1 * torch.mean(clipped_surrogate) - 0.01 * entropy.mean(), 0
             
     def compute_discounted_future_rewards(self, rewards):
-        discounts = np.array([self.gamma ** i for i in range(len(rewards))])[:, np.newaxis]
-        new_rewards = [np.sum(discounts * rewards, axis=0)]
-        for i in range(1, len(rewards)):
-            new_rewards.append(np.sum(discounts[:-i] * rewards[i:], axis=0))
-        return np.array(new_rewards)
+        # This is complex so giving an example with gamma = 0.5 and
+        # rewards = [[1, 0], [1, 1]]
+        main_dim = len(rewards)
+        # discounts = [1, 0.5]
+        discounts = (self.gamma ** np.arange(main_dim))
+        # discounts = [[1, 0.5],
+        #              [1, 0.5]]
+        discounts = np.tile(discounts, main_dim).reshape(main_dim, main_dim)
+        # indexes = [[0, 1],
+        #            [1, 2]]
+        indexes = np.tile(np.arange(main_dim), main_dim).reshape(main_dim, main_dim) + np.arange(main_dim)[:,np.newaxis]
+        # indexes = [[0, 1],
+        #            [1, 0]]
+        indexes = np.mod(indexes, main_dim)
+        # discounts = [[1, 0.5],
+        #              [0, 1]]
+        discounts = np.triu(discounts[range(main_dim), indexes])
+        # discounts = [[1.5, 0.5],
+        #              [1, 1]]
+        return np.dot(rewards.T, discounts.T).T
     
     def print_status(self, i_episode):
         print("\rEpisode %d/%d | Average Score: %.2f | Model surrogate: %.5f | Divergence: %.2f   " % (
