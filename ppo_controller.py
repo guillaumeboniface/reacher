@@ -48,7 +48,7 @@ class PPOController:
     def act(self, states):
         states = torch.from_numpy(states).float().to(device)
         self.policy.eval()
-        actions, log_probabilities = self.policy.next_actions(states)
+        actions, log_probabilities = self.policy.next_actions(states, self.std)
         return actions.cpu().data.numpy(), log_probabilities.cpu().data.numpy()
             
     def collect_trajectories(self, env, brain_name, policy):
@@ -98,6 +98,7 @@ class PPOController:
             surrogate_buffer.append(surrogate.cpu().data.numpy())
             self.optimizer.zero_grad()
             surrogate.backward()
+            #torch.nn.utils.clip_grad_norm_(self.policy.parameters(), 1)
             self.optimizer.step()
             if divergence > self.divergence_target * 1.5:
                 self.beta *= 2
@@ -108,7 +109,7 @@ class PPOController:
     
     def compute_surrogate(self, old_log_probabilities, states, actions, rewards):
         
-        new_log_probabilities, entropy = self.policy.get_log_probabilities_and_entropy(states, actions)
+        new_log_probabilities, entropy = self.policy.get_log_probabilities_and_entropy(states, actions, self.std)
         
         ratio = torch.exp(new_log_probabilities - old_log_probabilities)
 
@@ -177,22 +178,22 @@ class Policy(nn.Module):
         x = states
         for fc in self.fc:
             x = F.relu(fc(x))
-        normal_mean = torch.tanh(self.normal_mean_fc(x))
+        normal_mean = F.relu(self.normal_mean_fc(x))
         normal_mean = torch.tanh(self.normal_mean(normal_mean))
         return normal_mean
         
-    def next_actions(self, states):
+    def next_actions(self, states, std):
         with torch.no_grad():
             normal_mean = self.forward(states)
-            cov_mat = torch.diag_embed(torch.full((self.action_size,), 0.25))
+            cov_mat = torch.diag_embed(torch.full((self.action_size,), std ** 2))
             normal = torch.distributions.multivariate_normal.MultivariateNormal(normal_mean, cov_mat)
             actions = torch.clamp(normal.sample(), -1, 1)
             log_probabilities = normal.log_prob(actions)
         return actions, log_probabilities
         
-    def get_log_probabilities_and_entropy(self, states, actions):
+    def get_log_probabilities_and_entropy(self, states, actions, std):
         normal_mean = self.forward(states)
-        cov_mat = torch.diag_embed(torch.full((self.action_size,), 0.25))
+        cov_mat = torch.diag_embed(torch.full((self.action_size,), std ** 2))
         normal = torch.distributions.multivariate_normal.MultivariateNormal(normal_mean, cov_mat)
         log_probabilities = normal.log_prob(actions)
         return log_probabilities, normal.entropy()
