@@ -213,7 +213,7 @@ class Policy(nn.Module):
         with torch.no_grad():
             normal_mean = self.forward(states)
             cov_mat = torch.diag_embed(
-                torch.full((self.action_size,), self.std))
+                torch.full((self.action_size,), self.std ** 2))
             normal = torch.distributions.multivariate_normal.MultivariateNormal(
                 normal_mean, cov_mat)
             actions = normal.sample()
@@ -222,7 +222,7 @@ class Policy(nn.Module):
 
     def get_log_probabilities_and_entropy(self, states, actions):
         normal_mean = self.forward(states)
-        cov_mat = torch.diag_embed(torch.full((self.action_size,), self.std))
+        cov_mat = torch.diag_embed(torch.full((self.action_size,), self.std ** 2))
         normal = torch.distributions.multivariate_normal.MultivariateNormal(
             normal_mean, cov_mat)
         log_probabilities = normal.log_prob(actions)
@@ -288,9 +288,9 @@ class Normal:
     def log_prob(self, actions):
         log_probabilities = self.distri.log_prob(actions)
         cdf = self.distri.cdf(torch.clamp(actions, self.min, self.max))
-        log_probabilities[log_probabilities <= self.min] = cdf
-        log_probabilities[log_probabilities >= self.max] = 1 - cdf
-        return log_probabilities
+        log_probabilities[actions <= self.min] = torch.log(cdf[actions <= self.min])
+        log_probabilities[actions >= self.max] = torch.log(1 - cdf[actions >= self.max])
+        return torch.sum(log_probabilities, -1)
 
     def entropy(self):
         return self.distri.entropy()
