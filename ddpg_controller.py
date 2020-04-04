@@ -8,29 +8,61 @@ import torch.optim as optim
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
+
 class DDPGController:
+    """
+    Deep learning agent based on Deep Deterministic Policy Gradient described in https://arxiv.org/pdf/1509.02971.pdf
+    
+    """
 
     def __init__(self, env, brain_name, config):
+        """
+        Constructor methods to create the controller
+
+        Parameters
+        ----------
+        env - Unity environment for the agent to solve
+        brain_name, string, brain name used in conjunction with the environment
+        config - Dictionary containing the following keys:
+        - 'num_episodes', int, number of episodes to run the agent for
+        - 'gamma', float, discount rate for future rewards
+        - 'tau', float, rate for the soft update of the target network
+        - 'max_memory', int, size of the replay buffer in number of samples
+        - 'batch_size', int, size of the batches sampled to train the model on each update
+        - 'update_every', int, update frequency, in number of steps
+        - 'mlp_layers', int tuple, shape of the multilayer perceptron model
+        - 'learning_rate', float, learning rate for the training of the model
+        - 'state_size', int
+        - 'action_size', int
+        - 'num_agents', int, number of agents running in parallel in the environment
+
+        """
         self.env = env
         self.brain_name = brain_name
         self.__dict__.update(config.as_dict())
-        self.trained_policy = Policy(config, 33, 4)
-        self.target_policy = Policy(config, 33, 4)
-        self.trained_critic = Critic(config, 33, 4)
-        self.target_critic = Critic(config, 33, 4)
+        self.trained_policy = Policy(config, self.state_size, self.action_size)
+        self.target_policy = Policy(config, self.state_size, self.action_size)
+        self.trained_critic = Critic(config, self.state_size, self.action_size)
+        self.target_critic = Critic(config, self.state_size, self.action_size)
         # those networks will never be trained
         self.target_policy.eval()
         self.target_critic.eval()
         self.memory = AgentMemory(
-            ((20, 33), (20, 4), (20, 33), (20,), (20,)), int(self.max_memory))
+            ((self.num_agents, self.state_size), (self.num_agents, self.action_size), (self.num_agents, self.state_size), (self.num_agents,), (self.num_agents,)), int(self.max_memory))
         self.scores = []
         self.critic_losses = []
         self.surrogates = []
 
-        self.critic_optimizer = optim.Adam(self.trained_critic.parameters(), lr=config.learning_rate)
-        self.policy_optimizer = optim.Adam(self.trained_policy.parameters(), lr=config.learning_rate)
+        self.critic_optimizer = optim.Adam(
+            self.trained_critic.parameters(), lr=config.learning_rate)
+        self.policy_optimizer = optim.Adam(
+            self.trained_policy.parameters(), lr=config.learning_rate)
 
     def solve(self):
+        """
+        Main method to launch the environment loop
+
+        """
         step = 1
 
         for i_episode in range(1, self.num_episodes + 1):
@@ -66,6 +98,18 @@ class DDPGController:
         return self.scores, self.surrogates, self.critic_losses
 
     def act(self, states):
+        """
+        Based on states, returns the on-policy actions
+        
+        Parameter
+        ---------
+        states - float array shape=(num_agents, state_size)
+        
+        Return
+        ---------
+        Float array shape=(num_agents, action_size), chosen action
+
+        """
         states = torch.from_numpy(states).float().to(device)
         self.trained_policy.eval()
         with torch.no_grad():
@@ -74,7 +118,12 @@ class DDPGController:
         return actions.cpu().data.numpy()
 
     def train(self):
-        states, actions, next_states, rewards, dones = self.memory.sample(self.batch_size)
+        """
+        Training routine to update the policy and critic
+
+        """
+        states, actions, next_states, rewards, dones = self.memory.sample(
+            self.batch_size)
 
         states = torch.from_numpy(states).float().to(device)
         actions = torch.from_numpy(actions).float().to(device)
@@ -87,16 +136,19 @@ class DDPGController:
         self.trained_critic.train()
         self.critic_optimizer.zero_grad()
         done_mask = 1 - dones
-        target_states_values = rewards + self.gamma * self.target_critic(next_states, next_actions) * done_mask
+        target_states_values = rewards + self.gamma * \
+            self.target_critic(next_states, next_actions) * done_mask
         predicted_states_values = self.trained_critic(states, actions)
-        critic_loss = torch.mean((target_states_values - predicted_states_values) ** 2)
+        critic_loss = torch.mean(
+            (target_states_values - predicted_states_values) ** 2)
         critic_loss.backward()
         self.critic_optimizer.step()
 
         # policy update
         self.trained_policy.train()
         self.policy_optimizer.zero_grad()
-        action_values = self.trained_critic(states, self.trained_policy(states))
+        action_values = self.trained_critic(
+            states, self.trained_policy(states))
         surrogate = -torch.mean(action_values)
         surrogate.backward()
         self.policy_optimizer.step()
@@ -117,8 +169,16 @@ class DDPGController:
         for w1, w2 in zip(target_model_weights, train_model_weights):
             new_weights.append(w1 * (1 - self.tau) + w2 * self.tau)
         target_model.set_weights(new_weights)
-        
+
     def print_status(self, i_episode):
+        """
+        Print the latest status of the agent
+
+        Parameter
+        ---------
+        i_episode, int
+
+        """
         print("\rEpisode %d/%d | Average Score: %.2f | Surrogate: %.5f | Critic loss: %.5f  " % (
             i_episode,
             self.num_episodes,
@@ -127,9 +187,20 @@ class DDPGController:
             self.critic_losses[-1]), end="")
         sys.stdout.flush()
 
+
 class Policy(nn.Module):
 
     def __init__(self, config, state_size, action_size):
+        """
+        Constructor for the policy.
+        
+        Parameters
+        ----------
+        - config, dictionary with the same keys as the controller 
+        - state_size, int, size of the input to the model
+        - action_size, int, size of the policy output
+
+        """
         super(Policy, self).__init__()
         self.__dict__.update(config.as_dict())
         self.action_size = action_size
@@ -144,12 +215,24 @@ class Policy(nn.Module):
         self.action_output = nn.Linear(self.mlp_specs[-1], action_size)
 
     def forward(self, states):
+        """
+        Implements the forward pass of the policy.
+        
+        Parameters
+        ----------
+        - states, float Tensor shape=(batch_size, num_agents, state_size)
+        
+        Return
+        ----------
+        Predictions, float Tensor shape=(batch_size, num_agents, action_space_size)
+
+        """
         x = states
         for fc in self.fc:
             x = F.relu(fc(x))
         action_output = torch.tanh(self.action_output(x))
         return action_output
-    
+
     def get_weights(self):
         """
         Returns the model weights, necessary to update the target model of the DQN 
@@ -173,9 +256,20 @@ class Policy(nn.Module):
         for w1, w2 in zip(self.parameters(), weights):
             w1.data.copy_(w2)
 
+
 class Critic(nn.Module):
 
     def __init__(self, config, state_size, action_size):
+        """
+        Constructor for the critic.
+        
+        Parameters
+        ----------
+        - config, dictionary with the same keys as the controller 
+        - state_size, int, size of the input to the model
+        - action_size, int, size of the policy output
+
+        """
         super(Critic, self).__init__()
         self.__dict__.update(config.as_dict())
 
@@ -201,6 +295,19 @@ class Critic(nn.Module):
         self.final_layer = nn.Linear(self.mlp_specs[-1], 1)
 
     def forward(self, states, actions):
+        """
+        Implements the forward pass of the critic.
+        
+        Parameters
+        ----------
+        - states, float Tensor shape=(batch_size, num_agents, state_size)
+        - actions, float Tensor shape=(batch_size, num_agents, action_size)
+        
+        Return
+        ----------
+        Action values, float Tensor shape=(batch_size, num_agents)
+
+        """
         x = states
         for fc in self.state_fc:
             x = F.relu(fc(x))
@@ -209,7 +316,7 @@ class Critic(nn.Module):
         z = merge
         for fc in self.merge_fc:
             z = F.relu(fc(z))
-        
+
         return self.final_layer(z).squeeze()
 
     def get_weights(self):
