@@ -8,6 +8,7 @@ import torch.optim as optim
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
+
 class NStepDDPGController:
 
     def __init__(self, env, brain_name, config):
@@ -30,17 +31,22 @@ class NStepDDPGController:
         self.critic_losses = []
         self.surrogates = []
 
-        self.critic_optimizer = optim.Adam(self.trained_critic.parameters(), lr=config.learning_rate)
-        self.policy_optimizer = optim.Adam(self.trained_policy.parameters(), lr=config.learning_rate)
+        self.critic_optimizer = optim.Adam(
+            self.trained_critic.parameters(), lr=config.learning_rate)
+        self.policy_optimizer = optim.Adam(
+            self.trained_policy.parameters(), lr=config.learning_rate)
 
     def solve(self):
         step = 1
 
-        short_memory_states = np.zeros((self.n_step, self.num_agents, self.state_size))
-        short_memory_actions = np.zeros((self.n_step, self.num_agents, self.action_size))
+        short_memory_states = np.zeros(
+            (self.n_step, self.num_agents, self.state_size))
+        short_memory_actions = np.zeros(
+            (self.n_step, self.num_agents, self.action_size))
         short_memory_rewards = np.zeros((self.n_step, self.num_agents))
 
-        discount = self.gamma ** np.arange(self.n_step - 1, -1, -1, dtype=np.float64).reshape(self.n_step, 1)
+        discount = self.gamma ** np.arange(self.n_step -
+                                           1, -1, -1, dtype=np.float64).reshape(self.n_step, 1)
 
         for i_episode in range(1, self.num_episodes + 1):
             env_info = self.env.reset(train_mode=True)[self.brain_name]
@@ -64,7 +70,7 @@ class NStepDDPGController:
                 if t >= self.n_step:
                     self.memory.add(
                         (short_memory_states[0], short_memory_actions[0], next_state, short_memory_rewards[0], done))
-                
+
                 # shift the short memory window by one and empty the last spot
                 if self.n_step > 1:
                     short_memory_states[:-1] = short_memory_states[1:]
@@ -84,11 +90,15 @@ class NStepDDPGController:
                     assert(np.all(done))
                     # add all the samples in the short memory now that the episode is finished
                     for i in range(1, min(t, self.n_step)):
-                        self.memory.add((short_memory_states[::-1][i], short_memory_actions[::-1][i], next_state, short_memory_rewards[::-1][i], done))
+                        self.memory.add(
+                            (short_memory_states[::-1][i], short_memory_actions[::-1][i], next_state, short_memory_rewards[::-1][i], done))
                     # flush the short memory
-                    short_memory_states = np.zeros((self.n_step, self.num_agents, self.state_size))
-                    short_memory_actions = np.zeros((self.n_step, self.num_agents, self.action_size))
-                    short_memory_rewards = np.zeros((self.n_step, self.num_agents))
+                    short_memory_states = np.zeros(
+                        (self.n_step, self.num_agents, self.state_size))
+                    short_memory_actions = np.zeros(
+                        (self.n_step, self.num_agents, self.action_size))
+                    short_memory_rewards = np.zeros(
+                        (self.n_step, self.num_agents))
                     break
 
             self.scores.append(np.mean(np.sum(rewards, axis=0)))
@@ -108,7 +118,8 @@ class NStepDDPGController:
         return actions.cpu().data.numpy()
 
     def train(self):
-        states, actions, next_states, rewards, dones = self.memory.sample(self.batch_size)
+        states, actions, next_states, rewards, dones = self.memory.sample(
+            self.batch_size)
 
         states = torch.from_numpy(states).float().to(device)
         actions = torch.from_numpy(actions).float().to(device)
@@ -121,16 +132,19 @@ class NStepDDPGController:
         self.trained_critic.train()
         self.critic_optimizer.zero_grad()
         done_mask = 1 - dones
-        target_states_values = rewards + self.gamma ** self.n_step * self.target_critic(next_states, next_actions) * done_mask
+        target_states_values = rewards + self.gamma ** self.n_step * \
+            self.target_critic(next_states, next_actions) * done_mask
         predicted_states_values = self.trained_critic(states, actions)
-        critic_loss = torch.mean((target_states_values - predicted_states_values) ** 2)
+        critic_loss = torch.mean(
+            (target_states_values - predicted_states_values) ** 2)
         critic_loss.backward()
         self.critic_optimizer.step()
 
         # policy update
         self.trained_policy.train()
         self.policy_optimizer.zero_grad()
-        action_values = self.trained_critic(states, self.trained_policy(states))
+        action_values = self.trained_critic(
+            states, self.trained_policy(states))
         surrogate = -torch.mean(action_values)
         surrogate.backward()
         self.policy_optimizer.step()
@@ -151,7 +165,7 @@ class NStepDDPGController:
         for w1, w2 in zip(target_model_weights, train_model_weights):
             new_weights.append(w1 * (1 - self.tau) + w2 * self.tau)
         target_model.set_weights(new_weights)
-        
+
     def print_status(self, i_episode):
         print("\rEpisode %d/%d | Average Score: %.2f | Surrogate: %.5f | Critic loss: %.5f  " % (
             i_episode,
@@ -160,6 +174,7 @@ class NStepDDPGController:
             self.surrogates[-1],
             self.critic_losses[-1]), end="")
         sys.stdout.flush()
+
 
 class Policy(nn.Module):
 
@@ -183,7 +198,7 @@ class Policy(nn.Module):
             x = F.relu(fc(x))
         action_output = torch.tanh(self.action_output(x))
         return action_output
-    
+
     def get_weights(self):
         """
         Returns the model weights, necessary to update the target model of the DQN 
@@ -206,6 +221,7 @@ class Policy(nn.Module):
         """
         for w1, w2 in zip(self.parameters(), weights):
             w1.data.copy_(w2)
+
 
 class Critic(nn.Module):
 
@@ -243,7 +259,7 @@ class Critic(nn.Module):
         z = merge
         for fc in self.merge_fc:
             z = F.relu(fc(z))
-        
+
         return self.final_layer(z).squeeze()
 
     def get_weights(self):

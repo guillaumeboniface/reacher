@@ -55,54 +55,38 @@ class MockCritic:
     def __call__(self, states):
         return torch.arange(np.prod(states.shape)).view(states.shape)
 
+    def parameters(self):
+        return torch.nn.Linear(5, 5).parameters()
+
+    def eval(self):
+        return
+
 class Config:
     def __init__(self):
         self.num_episodes = 1
         self.epsilon_start = 0.05
-        self.beta_start = 1
+        self.max_memory = 2
         self.epsilon_decay = 0.995
         self.learning_rate = 5e-4
         self.train_iterations = 4
         self.gamma = 0.5
         self.mlp_specs = (200, 150)
-        self.gae_lambda = 0.5
         
     def as_dict(self):
         return self.__dict__
     
-class TestCollectTrajectories(unittest.TestCase):
+class TestController(unittest.TestCase):
     
     def setUp(self):
         self.env = MockEnvironment((33,), [[-1, 1] for i in range(4)], 20)
         self.policy = MockContinuousPolicy((4,))
         self.critic = MockCritic()
         self.controller = PPOController(self.env, 'bla', Config(), policy=self.policy, critic=self.critic)
-
-    def test_shape(self):
-        probabilities, states, actions, rewards = self.controller.collect_trajectories(self.env, 'bla', self.policy)
-        self.assertEqual(probabilities.shape, (2, 20, 4))
-        self.assertEqual(states.shape, (2, 20, 33))
-        self.assertEqual(actions.shape, (2, 20, 4))
-        self.assertEqual(rewards.shape, (2, 20))
         
     def test_compute_discounted_future_rewards(self):
         rewards = np.array([[1, 0], [1, 1]])
         rewards = self.controller.compute_discounted_future_rewards(rewards)
         self.assertTrue(np.all(rewards == np.array([[1.5, 0.5], [1, 1]])))
-        
-    def test_compute_gae_matrix(self):
-        rewards = np.array([[1, 0], [1, 1]])
-        matrix = self.controller.compute_gae_matrix(rewards)
-        self.assertTrue(np.all(matrix == np.array([[[1, 0], [1, 1]], [[1.5, 0.5], [1, 1]]])))
-        
-    def test_compute_gae(self):
-        rewards = np.array([[1, 0], [1, 1]])
-        matrix = self.controller.compute_gae_matrix(rewards)
-        print(matrix)
-        states = torch.ones((2, 2))
-        gae = self.controller.compute_gae(states, torch.from_numpy(matrix))
-        print(gae)
-        self.assertTrue(torch.all(gae == torch.Tensor([[1.875, 0.875], [-0.75, -1.5]])))
         
         
 
