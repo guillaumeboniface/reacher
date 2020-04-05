@@ -1,6 +1,6 @@
 # Reacher
 
-This repository contains a collection of agents for environments with continuous action spaces. The environment considered is a robotic arm with 2 joints operating in a 3D space. A moving target rotates around the arm and the goal of the arm is to maintain its end inside the target. At each step the agents action is made of the torque applied to each of its joint along 2 axis. For each step spent within target, the agent receives a reward of 0.1. Each episode lasts 1000 steps.
+This repository contains a collection of agents for environments with continuous action spaces. The environment considered is a robotic arm with 2 joints operating in a 3D space. A moving target rotates around the arm and the goal of the arm is to maintain its end inside the target. At each step the agents action is made of the torque applied to each of its joint along 2 axis. For each step spent within target, the agent receives a reward of 0.1. Each episode lasts 1000 steps. The environment is considered solved if the agent achieve an average reward of 30 over 100 consecutive episodes.
 
 ![reacher environment](./reacher.gif)
 

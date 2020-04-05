@@ -63,6 +63,10 @@ class MockCritic:
 
 class Config:
     def __init__(self):
+        self.num_agents = 2
+        self.state_size = 5
+        self.action_size = 4
+        
         self.num_episodes = 1
         self.epsilon_start = 0.05
         self.max_memory = 2
