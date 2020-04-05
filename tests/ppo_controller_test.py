@@ -49,12 +49,27 @@ class MockContinuousPolicy:
     
     def eval(self):
         return
+    
+class MockCritic:
+        
+    def __call__(self, states):
+        return torch.arange(np.prod(states.shape)).view(states.shape)
+
+    def parameters(self):
+        return torch.nn.Linear(5, 5).parameters()
+
+    def eval(self):
+        return
 
 class Config:
     def __init__(self):
+        self.num_agents = 2
+        self.state_size = 5
+        self.action_size = 4
+        
         self.num_episodes = 1
         self.epsilon_start = 0.05
-        self.beta_start = 1
+        self.max_memory = 2
         self.epsilon_decay = 0.995
         self.learning_rate = 5e-4
         self.train_iterations = 4
@@ -64,24 +79,17 @@ class Config:
     def as_dict(self):
         return self.__dict__
     
-class TestCollectTrajectories(unittest.TestCase):
+class TestController(unittest.TestCase):
     
     def setUp(self):
         self.env = MockEnvironment((33,), [[-1, 1] for i in range(4)], 20)
         self.policy = MockContinuousPolicy((4,))
-        self.controller = PPOController(self.env, 'bla', Config(), policy=self.policy)
-
-    def test_shape(self):
-        probabilities, states, actions, rewards = self.controller.collect_trajectories(self.env, 'bla', self.policy)
-        self.assertEqual(probabilities.shape, (2, 20, 4))
-        self.assertEqual(states.shape, (2, 20, 33))
-        self.assertEqual(actions.shape, (2, 20, 4))
-        self.assertEqual(rewards.shape, (2, 20))
+        self.critic = MockCritic()
+        self.controller = PPOController(self.env, 'bla', Config(), policy=self.policy, critic=self.critic)
         
     def test_compute_discounted_future_rewards(self):
         rewards = np.array([[1, 0], [1, 1]])
         rewards = self.controller.compute_discounted_future_rewards(rewards)
-        print(rewards)
         self.assertTrue(np.all(rewards == np.array([[1.5, 0.5], [1, 1]])))
         
         
